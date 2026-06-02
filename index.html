@@ -378,7 +378,7 @@ header {
       <div class="setup-warn" id="warn-gemini">
         <strong>Gemini API Key Required</strong><br>
         Get your free key at <strong>aistudio.google.com</strong> → Get API Key.<br>
-        <input type="text" id="gkey-input" placeholder="Paste Gemini API key here… (AIza…)">
+        <input type="text" id="gkey-input" placeholder="Paste Gemini API key here…">
         <button onclick="saveGeminiKey()">Save API Key</button>
       </div>
 
@@ -426,7 +426,7 @@ header {
 // ═══════════════════════════════════════════════════════
 //  CONFIGURATION — fill these two lines in, then done
 // ═══════════════════════════════════════════════════════
-const MS_CLIENT_ID   = '3c09a93d-cbf2-4f66-bce7-df4119800020';   // Azure Client ID from IT
+const MS_CLIENT_ID   = '';   // Azure Client ID from IT
 const GEMINI_API_KEY = '';   // Free from aistudio.google.com
 const DAILY_LIMIT    = 1500;
 const COUNTER_FILE   = 'rhino_assistant_counter.json';
@@ -439,7 +439,7 @@ const BLOCKED = [
 ];
 // ═══════════════════════════════════════════════════════
 
-const TENANT = '7b777b6f-ab0f-42de-9f9a-fd1f31b729e6';
+const TENANT = 'common';
 let token = null, userInitials = 'RE', fileData = {}, history = [], busy = false, counterFileId = null;
 
 // ── Shared counter ──
@@ -527,7 +527,7 @@ function saveClientId() {
 }
 function saveGeminiKey() {
   const v = document.getElementById('gkey-input').value.trim();
-  if (!v || !v.startsWith('AI')) return alert('That does not look like a valid Gemini key (should start with "AI").');
+  if (!v || v.length < 10) return alert('Please paste your Gemini API key.');
   localStorage.setItem('re_gkey', v);
   document.getElementById('warn-gemini').style.display = 'none';
 }
