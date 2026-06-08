@@ -580,6 +580,8 @@ async function loadFiles() {
   setStatus('amber', 'Searching OneDrive for project files…');
   const terms = ['.xlsx','.docx','BOQ','policy','procedure','PPE','project'];
   const seen = new Set(), files = [];
+
+  // 1 — Search personal OneDrive
   for (const q of terms) {
     try {
       const r = await fetch(
@@ -589,11 +591,56 @@ async function loadFiles() {
       const d = await r.json();
       for (const f of (d.value||[])) {
         if (!seen.has(f.id) && f.name !== COUNTER_FILE && f.name.match(/\.(xlsx|xls|csv|txt|docx|doc)$/i)) {
-          seen.add(f.id); files.push(f);
+          seen.add(f.id); files.push({ id: f.id, name: f.name, driveId: null });
         }
       }
     } catch(e) {}
   }
+
+  // 2 — Files shared with this user (SharePoint/shared folders)
+  try {
+    const sr = await fetch(
+      'https://graph.microsoft.com/v1.0/me/drive/sharedWithMe?$select=id,name,remoteItem',
+      { headers: { Authorization: `Bearer ${token}` } });
+    if (sr.ok) {
+      const sd = await sr.json();
+      for (const f of (sd.value||[])) {
+        const name = f.name;
+        const remoteId = f.remoteItem?.id || f.id;
+        const driveId = f.remoteItem?.parentReference?.driveId || null;
+        if (!seen.has(remoteId) && name !== COUNTER_FILE && name.match(/\.(xlsx|xls|csv|txt|docx|doc)$/i)) {
+          seen.add(remoteId);
+          files.push({ id: remoteId, name, driveId });
+        }
+      }
+    }
+  } catch(e) {}
+
+  // 3 — Search all drives this user has access to
+  try {
+    const dr = await fetch('https://graph.microsoft.com/v1.0/me/drives',
+      { headers: { Authorization: `Bearer ${token}` } });
+    if (dr.ok) {
+      const dd = await dr.json();
+      for (const drive of (dd.value||[])) {
+        for (const q of ['.xlsx','.docx','BOQ','policy']) {
+          try {
+            const r = await fetch(
+              `https://graph.microsoft.com/v1.0/drives/${drive.id}/root/search(q='${encodeURIComponent(q)}')?$select=id,name&$top=10`,
+              { headers: { Authorization: `Bearer ${token}` } });
+            if (!r.ok) continue;
+            const d = await r.json();
+            for (const f of (d.value||[])) {
+              if (!seen.has(f.id) && f.name !== COUNTER_FILE && f.name.match(/\.(xlsx|xls|csv|txt|docx|doc)$/i)) {
+                seen.add(f.id);
+                files.push({ id: f.id, name: f.name, driveId: drive.id });
+              }
+            }
+          } catch(e) {}
+        }
+      }
+    }
+  } catch(e) {}
   if (!files.length) {
     setStatus('', 'No project files found.');
     addMsg('assistant', 'I could not find project files in your OneDrive. Make sure your BOQ and policy files are saved there, then refresh.');
@@ -601,7 +648,7 @@ async function loadFiles() {
   }
   setStatus('amber', `Reading ${files.length} files…`);
   for (const f of files.slice(0,25)) {
-    try { const t = await readFile(f.id, f.name); if (t && t.length > 30) fileData[f.name] = t; } catch(e) {}
+    try { const t = await readFile(f.id, f.name, f.driveId); if (t && t.length > 30) fileData[f.name] = t; } catch(e) {}
   }
   const count = Object.keys(fileData).length;
   const names = Object.keys(fileData).slice(0,3).map(n=>`<em>${n}</em>`).join(', ');
@@ -614,8 +661,11 @@ async function loadFiles() {
   enableInput();
 }
 
-async function readFile(id, name) {
-  const r = await fetch(`https://graph.microsoft.com/v1.0/me/drive/items/${id}/content`,
+async function readFile(id, name, driveId) {
+  const endpoint = driveId
+    ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${id}/content`
+    : `https://graph.microsoft.com/v1.0/me/drive/items/${id}/content`;
+  const r = await fetch(endpoint,
     { headers: { Authorization: `Bearer ${token}` } });
   if (!r.ok) return null;
   const buf = await r.arrayBuffer();
