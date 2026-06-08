@@ -738,12 +738,14 @@ Rules: Answer strictly from the project data. Be specific with model numbers, qu
 PROJECT DATA:\n${context}`;
 
     const resp = await fetch(
-      `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${key}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,
       {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          system_instruction: { parts: [{ text: systemInstruction }] },
-          contents: history.slice(-10),
+          contents: [
+            { role: 'user', parts: [{ text: 'SYSTEM INSTRUCTIONS:\n' + systemInstruction + '\n\nUSER QUERY:\n' + (history.slice(-10)[0]?.parts[0]?.text || '') }] },
+            ...history.slice(-10).slice(1)
+          ],
           generationConfig: { maxOutputTokens: 1024, temperature: 0.2 }
         })
       }
