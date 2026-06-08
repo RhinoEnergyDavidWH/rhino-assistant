@@ -558,7 +558,7 @@ function parseHashToken() {
   token = decodeURIComponent(p.access_token);
   const exp = Date.now() + (parseInt(p.expires_in)||3600)*1000;
   localStorage.setItem('re_token', token); localStorage.setItem('re_token_exp', exp.toString());
-  history.replaceState(null, '', location.pathname); return true;
+  window.history.replaceState(null, "", location.pathname); return true;
 }
 function loadCachedToken() {
   const t = localStorage.getItem('re_token'), e = parseInt(localStorage.getItem('re_token_exp')||'0');
