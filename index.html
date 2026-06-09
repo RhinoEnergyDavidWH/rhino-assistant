@@ -440,7 +440,12 @@ const BLOCKED = [
 // ═══════════════════════════════════════════════════════
 
 const TENANT = '7b777b6f-ab0f-42de-9f9a-fd1f31b729e6';
-let token = null, userInitials = 'RE', fileData = {}, history = [], busy = false, counterFileId = null;
+
+// ── PPE Management (Supabase) ──
+const SUPABASE_URL = 'https://ryxqrwwyxqvueixapivx.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ5eHFyd3d5eHF2dWVpeGFwaXZ4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0ODIxMjgsImV4cCI6MjA5NjA1ODEyOH0.Dp1vEt4Oinr4h_g0AnPui47RWRSxrWBpuSTj8HsywB4';
+
+let token = null, userInitials = 'RE', fileData = {}, ppeData = '', history = [], busy = false, counterFileId = null;
 
 // ── Shared counter ──
 function todayStr() { return new Date().toISOString().slice(0,10); }
@@ -576,6 +581,57 @@ async function loadUser() {
 }
 
 // ── File loading ──
+// ── PPE Data from Supabase ──
+async function loadPPEData() {
+  try {
+    const headers = {
+      'apikey': SUPABASE_KEY,
+      'Authorization': 'Bearer ' + SUPABASE_KEY,
+      'Content-Type': 'application/json'
+    };
+
+    // Fetch stock, thresholds and recent signouts in parallel
+    const [stockRes, threshRes, signoutRes] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/stock?select=*`, { headers }),
+      fetch(`${SUPABASE_URL}/rest/v1/thresholds?select=*`, { headers }),
+      fetch(`${SUPABASE_URL}/rest/v1/signouts?select=*&order=created_at.desc&limit=100`, { headers })
+    ]);
+
+    const stock    = stockRes.ok    ? await stockRes.json()    : [];
+    const thresh   = threshRes.ok   ? await threshRes.json()   : [];
+    const signouts = signoutRes.ok  ? await signoutRes.json()  : [];
+
+    if (!stock.length && !signouts.length) return;
+
+    // Build threshold lookup
+    const threshMap = {};
+    thresh.forEach(t => { threshMap[t.name] = t.value; });
+
+    // Format stock summary
+    let out = '=== PPE MANAGEMENT — LIVE STOCK ===\n';
+    stock.forEach(item => {
+      const low = threshMap[item.name] || 0;
+      const status = item.quantity <= 0 ? 'OUT OF STOCK' : item.quantity <= low ? 'LOW STOCK' : 'OK';
+      out += `${item.name}: ${item.quantity} units [${status}${low ? ', threshold: '+low : ''}]\n`;
+    });
+
+    // Format recent sign-outs
+    if (signouts.length) {
+      out += '\n=== PPE SIGN-OUTS (recent 100) ===\n';
+      out += 'Date | Name | Team | Item | Size | Qty | Site\n';
+      signouts.forEach(s => {
+        const d = s.created_at ? s.created_at.slice(0,10) : '';
+        out += `${d} | ${s.name||''} | ${s.team||''} | ${s.item||''} | ${s.size||''} | ${s.qty||''} | ${s.site||''}\n`;
+      });
+    }
+
+    ppeData = out;
+    console.log('✅ PPE data loaded:', stock.length, 'items,', signouts.length, 'sign-outs');
+  } catch(e) {
+    console.warn('PPE data load failed:', e.message);
+  }
+}
+
 async function loadFiles() {
   setStatus('amber', 'Searching OneDrive for project files…');
   const terms = ['.xlsx','.docx','BOQ','policy','procedure','PPE','project'];
@@ -728,9 +784,10 @@ async function send() {
     const key = getGeminiKey();
     if (!key) throw new Error('No Gemini API key configured.');
 
-    const context = Object.keys(fileData).length > 0
-      ? Object.values(fileData).join('\n\n---\n\n').slice(0, 900000)
-      : 'No project files loaded.';
+    const filePart = Object.keys(fileData).length > 0
+      ? Object.values(fileData).join('\n\n---\n\n')
+      : '';
+    const context = (filePart + (ppeData ? '\n\n---\n\n' + ppeData : '') || 'No project files loaded.').slice(0, 900000);
 
     const systemInstruction = `You are the Rhino Energy Project Assistant — an internal tool for Rhino Energy Solutions staff in South Africa (Solar. Energy. Excellence.)
 Answer questions about: solar and electrical project BOQs, installed equipment (panels, inverters, cabling, mounting), quantities, materials, PPE requirements, company policies and procedures, and available equipment.
@@ -823,7 +880,7 @@ function fmt(t) {
     document.getElementById('screen-signin').style.display = 'none';
     document.getElementById('screen-chat').classList.add('show');
     await loadUser().catch(()=>{});
-    await Promise.all([refreshCounterDisplay(), loadFiles()]);
+    await Promise.all([refreshCounterDisplay(), loadFiles(), loadPPEData()]);
   }
 })();
 </script>
