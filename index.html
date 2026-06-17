@@ -376,9 +376,9 @@ header {
       </div>
 
       <div class="setup-warn" id="warn-gemini">
-        <strong>Gemini API Key Required</strong><br>
-        Get your free key at <strong>aistudio.google.com</strong> → Get API Key.<br>
-        <input type="text" id="gkey-input" placeholder="Paste Gemini API key here…">
+        <strong>Anthropic API Key Required</strong><br>
+        Get your key from <strong>console.anthropic.com</strong> → API Keys → Create Key.<br>
+        <input type="text" id="gkey-input" placeholder="Paste API key here… (sk-ant-…)">
         <button onclick="saveGeminiKey()">Save API Key</button>
       </div>
 
@@ -405,12 +405,33 @@ header {
   <div id="limit-banner"></div>
   <div id="messages"></div>
   <div id="suggestions">
-    <button class="sug" onclick="useSug(this)">What panels were installed at [project]?</button>
-    <button class="sug" onclick="useSug(this)">What PPE is required on site?</button>
-    <button class="sug" onclick="useSug(this)">List all our projects</button>
-    <button class="sug" onclick="useSug(this)">What inverters do we install?</button>
-    <button class="sug" onclick="useSug(this)">What are our safety policies?</button>
-    <button class="sug" onclick="useSug(this)">What equipment do we have?</button>
+    <div id="sug-tabs" style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;">
+      <button class="sug-tab active" onclick="switchTab('projects')" id="tab-projects" style="padding:4px 12px;border-radius:20px;border:1px solid var(--yellow);background:var(--yellow);color:var(--dark);font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;cursor:pointer;">Projects</button>
+      <button class="sug-tab" onclick="switchTab('ppe')" id="tab-ppe" style="padding:4px 12px;border-radius:20px;border:1px solid var(--border);background:var(--white);color:var(--dark);font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;cursor:pointer;">PPE</button>
+      <button class="sug-tab" onclick="switchTab('equipment')" id="tab-equipment" style="padding:4px 12px;border-radius:20px;border:1px solid var(--border);background:var(--white);color:var(--dark);font-family:'Barlow Condensed',sans-serif;font-size:12px;font-weight:700;letter-spacing:0.05em;text-transform:uppercase;cursor:pointer;">Equipment</button>
+    </div>
+    <div id="sugs-projects">
+      <button class="sug" onclick="useSug(this)">What panels were installed at [project]?</button>
+      <button class="sug" onclick="useSug(this)">List all our projects</button>
+      <button class="sug" onclick="useSug(this)">What inverters do we install?</button>
+      <button class="sug" onclick="useSug(this)">What are our safety policies?</button>
+      <button class="sug" onclick="useSug(this)">What materials are in the [project] BOQ?</button>
+      <button class="sug" onclick="useSug(this)">What cabling was used at [project]?</button>
+    </div>
+    <div id="sugs-ppe" style="display:none">
+      <button class="sug" onclick="useSug(this)">What PPE is currently low on stock?</button>
+      <button class="sug" onclick="useSug(this)">What PPE do we have in stock?</button>
+      <button class="sug" onclick="useSug(this)">Who signed out PPE recently?</button>
+      <button class="sug" onclick="useSug(this)">What PPE is required on site?</button>
+      <button class="sug" onclick="useSug(this)">How many hard hats do we have?</button>
+      <button class="sug" onclick="useSug(this)">What PPE was issued to [name]?</button>
+    </div>
+    <div id="sugs-equipment" style="display:none">
+      <button class="sug" onclick="useSug(this)">What equipment do we have?</button>
+      <button class="sug" onclick="useSug(this)">What tools are available in the warehouse?</button>
+      <button class="sug" onclick="useSug(this)">What vehicles do we have?</button>
+      <button class="sug" onclick="useSug(this)">List all company equipment</button>
+    </div>
   </div>
   <div class="input-wrap">
     <textarea id="q" placeholder="Ask anything about Rhino Energy projects…" rows="1"
@@ -427,7 +448,7 @@ header {
 //  CONFIGURATION — fill these two lines in, then done
 // ═══════════════════════════════════════════════════════
 const MS_CLIENT_ID   = '3c09a93d-cbf2-4f66-bce7-df4119800020';   // Azure Client ID from IT
-const GEMINI_API_KEY = '';   // Free from aistudio.google.com
+const ANTHROPIC_API_KEY = '';   // From console.anthropic.com — starts with sk-ant-
 const DAILY_LIMIT    = 1500;
 const COUNTER_FILE   = 'rhino_assistant_counter.json';
 
@@ -523,7 +544,7 @@ function updateCounterUI(used) {
 
 // ── Config ──
 function getMsClientId() { return MS_CLIENT_ID || localStorage.getItem('re_cid') || ''; }
-function getGeminiKey()  { return GEMINI_API_KEY || localStorage.getItem('re_gkey') || ''; }
+function getGeminiKey()  { return ANTHROPIC_API_KEY || localStorage.getItem('re_gkey') || ''; }
 function saveClientId() {
   const v = document.getElementById('cid-input').value.trim();
   if (!v) return alert('Please paste the Client ID first.');
@@ -532,7 +553,7 @@ function saveClientId() {
 }
 function saveGeminiKey() {
   const v = document.getElementById('gkey-input').value.trim();
-  if (!v || v.length < 10) return alert('Please paste your Gemini API key.');
+  if (!v || !v.startsWith('sk-ant-')) return alert('That does not look like a valid Anthropic API key (should start with "sk-ant-").');
   localStorage.setItem('re_gkey', v);
   document.getElementById('warn-gemini').style.display = 'none';
 }
@@ -782,31 +803,41 @@ async function send() {
 
   try {
     const key = getGeminiKey();
-    if (!key) throw new Error('No Gemini API key configured.');
+    if (!key) throw new Error('No Anthropic API key configured.');
 
     const filePart = Object.keys(fileData).length > 0
       ? Object.values(fileData).join('\n\n---\n\n')
       : '';
-    const context = (filePart + (ppeData ? '\n\n---\n\n' + ppeData : '') || 'No project files loaded.').slice(0, 900000);
+    const context = (filePart + (ppeData ? '\n\n---\n\n' + ppeData : '') || 'No project files loaded.').slice(0, 180000);
 
-    const systemInstruction = `You are the Rhino Energy Project Assistant — an internal tool for Rhino Energy Solutions staff in South Africa (Solar. Energy. Excellence.)
+    const systemPrompt = `You are the Rhino Energy Project Assistant — an internal tool for Rhino Energy Solutions staff in South Africa (Solar. Energy. Excellence.)
 Answer questions about: solar and electrical project BOQs, installed equipment (panels, inverters, cabling, mounting), quantities, materials, PPE requirements, company policies and procedures, and available equipment.
-Rules: Answer strictly from the project data. Be specific with model numbers, quantities, and units. Decline questions about salaries, wages, payroll, profit margins, contract pricing, or HR/disciplinary matters. If you cannot find the answer, say so clearly. Use bullet points for lists. Use South African English. Be professional and helpful.
-PROJECT DATA:\n${context}`;
+Rules: Answer strictly from the project data provided. Be specific with model numbers, quantities, and units. Decline questions about salaries, wages, payroll, profit margins, contract pricing, or HR/disciplinary matters. If you cannot find the answer, say so clearly. Use bullet points for lists. Use South African English. Be professional and helpful.
 
-    const resp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`,
-      {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            { role: 'user', parts: [{ text: 'SYSTEM INSTRUCTIONS:\n' + systemInstruction + '\n\nUSER QUERY:\n' + (history.slice(-10)[0]?.parts[0]?.text || '') }] },
-            ...history.slice(-10).slice(1)
-          ],
-          generationConfig: { maxOutputTokens: 1024, temperature: 0.2 }
-        })
-      }
-    );
+PROJECT DATA:
+${context}`;
+
+    // Build messages for Claude — convert from Gemini format
+    const messages = history.slice(-10).map(m => ({
+      role: m.role === 'model' ? 'assistant' : 'user',
+      content: m.parts[0].text
+    }));
+
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5',
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: messages
+      })
+    });
 
     removeTyping(tid);
     if (!resp.ok) {
@@ -814,7 +845,7 @@ PROJECT DATA:\n${context}`;
       throw new Error(e.error?.message || `API error ${resp.status}`);
     }
     const data = await resp.json();
-    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response received.';
+    const reply = data.content?.[0]?.text || 'No response received.';
     history.push({ role:'model', parts:[{ text: reply }] });
     addMsg('assistant', fmt(reply));
     const newUsed = await getAndIncrementCounter();
@@ -859,6 +890,16 @@ function enableInput() {
   document.getElementById('q').disabled = false;
 }
 function useSug(btn) { document.getElementById('q').value = btn.textContent; document.getElementById('q').focus(); }
+function switchTab(tab) {
+  ['projects','ppe','equipment'].forEach(t => {
+    document.getElementById('sugs-'+t).style.display = t===tab ? 'flex' : 'none';
+    document.getElementById('sugs-'+t).style.flexWrap = 'wrap';
+    document.getElementById('sugs-'+t).style.gap = '6px';
+    const btn = document.getElementById('tab-'+t);
+    btn.style.background = t===tab ? 'var(--yellow)' : 'var(--white)';
+    btn.style.borderColor = t===tab ? 'var(--yellow)' : 'var(--border)';
+  });
+}
 function handleKey(e) { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();} }
 function grow(el) { el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,130)+'px'; }
 function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
