@@ -868,7 +868,119 @@ async function discoverFiles(terms, cat) {
       } catch(e) {}
     }
   } catch(e) {}
+
+  // ── DIRECT FOLDER NAVIGATION ──
+  // For BOQ category: navigate directly into the known folder paths
+  // This finds files regardless of search index depth
+  if (cat === 'boq') {
+    await navigateFolderPaths(addFile, headers);
+  }
 }
+
+// Recursively list all files in a drive folder
+async function listFolderContents(driveId, itemId, headers, addFile, depth) {
+  if (depth > 4) return; // max 4 levels deep
+  try {
+    const endpoint = driveId
+      ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/children?$select=id,name,folder&$top=200`
+      : `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}/children?$select=id,name,folder&$top=200`;
+    const r = await fetch(endpoint, { headers });
+    if (!r.ok) return;
+    const d = await r.json();
+    for (const item of (d.value || [])) {
+      if (item.folder) {
+        // It's a folder — recurse into it
+        await listFolderContents(driveId, item.id, headers, addFile, depth + 1);
+      } else {
+        // It's a file — add it
+        addFile({ id: item.id, name: item.name }, driveId);
+      }
+    }
+  } catch(e) {}
+}
+
+// Try known folder paths across all drives
+async function navigateFolderPaths(addFile, headers) {
+  // Known path candidates for BOQ Projects folder
+  const knownPaths = [
+    "RES Stores Stock/BOQ's/BOQ Projects",
+    "RES Stores Stock/BOQs/BOQ Projects",
+    "RES Stores Stock/BOQ/BOQ Projects",
+    "BOQ's/BOQ Projects",
+    "BOQ Projects",
+    "RES Stores Stock/BOQ's",
+  ];
+
+  // Try on personal OneDrive first
+  for (const path of knownPaths) {
+    try {
+      const r = await fetch(
+        `https://graph.microsoft.com/v1.0/me/drive/root:/${encodeURIComponent(path)}?$select=id,name`,
+        { headers });
+      if (r.ok) {
+        const folder = await r.json();
+        if (folder.id) {
+          console.log('✅ Found BOQ folder via personal drive:', path);
+          await listFolderContents(null, folder.id, headers, addFile, 0);
+        }
+      }
+    } catch(e) {}
+  }
+
+  // Try on all accessible drives
+  try {
+    const dr = await fetch('https://graph.microsoft.com/v1.0/me/drives?$select=id,name', { headers });
+    if (dr.ok) {
+      const drives = (await dr.json()).value || [];
+      for (const drive of drives) {
+        for (const path of knownPaths) {
+          try {
+            const r = await fetch(
+              `https://graph.microsoft.com/v1.0/drives/${drive.id}/root:/${encodeURIComponent(path)}?$select=id,name`,
+              { headers });
+            if (r.ok) {
+              const folder = await r.json();
+              if (folder.id) {
+                console.log('✅ Found BOQ folder on drive', drive.name, ':', path);
+                await listFolderContents(drive.id, folder.id, headers, addFile, 0);
+              }
+            }
+          } catch(e) {}
+        }
+      }
+    }
+  } catch(e) {}
+
+  // Try on all SharePoint sites
+  try {
+    const sr = await fetch('https://graph.microsoft.com/v1.0/sites?search=*&$select=id,displayName', { headers });
+    if (sr.ok) {
+      const sites = (await sr.json()).value || [];
+      for (const site of sites.slice(0, 15)) {
+        try {
+          const drivesR = await fetch(`https://graph.microsoft.com/v1.0/sites/${site.id}/drives?$select=id,name`, { headers });
+          if (!drivesR.ok) continue;
+          const drives = (await drivesR.json()).value || [];
+          for (const drive of drives) {
+            for (const path of knownPaths) {
+              try {
+                const r = await fetch(
+                  `https://graph.microsoft.com/v1.0/drives/${drive.id}/root:/${encodeURIComponent(path)}?$select=id,name`,
+                  { headers });
+                if (r.ok) {
+                  const folder = await r.json();
+                  if (folder.id) {
+                    console.log('✅ Found BOQ folder on SharePoint site', site.displayName, ':', path);
+                    await listFolderContents(drive.id, folder.id, headers, addFile, 0);
+                  }
+                }
+              } catch(e) {}
+            }
+          }
+        } catch(e) {}
+      }
+    }
+  } catch(e) {}
 
 // ═══════════════════════════════════════════════
 // ON-DEMAND FILE READING
