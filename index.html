@@ -769,9 +769,9 @@ async function discoverFiles(terms, cat) {
   discoveredFiles = [];
 
   const addFile = (f, driveId) => {
-    if (!seen.has(f.id) && f.name !== COUNTER_FILE && f.name.match(/\.(xlsx|xls|csv|txt|docx|doc)$/i)) {
+    if (!seen.has(f.id) && f.name !== COUNTER_FILE && f.name.match(/\.(xlsx|xls|csv|txt|docx|doc|pdf)$/i)) {
       seen.add(f.id);
-      discoveredFiles.push({ id: f.id, name: f.name, driveId: driveId || null });
+      discoveredFiles.push({ id: f.id, name: f.name, driveId: driveId || null, webUrl: f.webUrl || null });
     }
   };
 
@@ -782,7 +782,7 @@ async function discoverFiles(terms, cat) {
     try {
       const r = await fetch(
         `https://graph.microsoft.com/v1.0/me/drive/root/search(q='${encodeURIComponent(q)}')` +
-        `?$select=id,name&$top=100`, { headers });
+        `?$select=id,name,webUrl&$top=100`, { headers });
       if (r.ok) (await r.json()).value?.forEach(f => addFile(f, null));
     } catch(e) {}
   }
@@ -810,7 +810,7 @@ async function discoverFiles(terms, cat) {
           try {
             const r = await fetch(
               `https://graph.microsoft.com/v1.0/drives/${drive.id}/root/search(q='${encodeURIComponent(q)}')` +
-              `?$select=id,name&$top=100`, { headers });
+              `?$select=id,name,webUrl&$top=100`, { headers });
             if (r.ok) (await r.json()).value?.forEach(f => addFile(f, drive.id));
           } catch(e) {}
         }
@@ -826,7 +826,7 @@ async function discoverFiles(terms, cat) {
 async function enumerateDriveRoot(driveId, headers, addFile, cat) {
   try {
     const r = await fetch(
-      `https://graph.microsoft.com/v1.0/drives/${driveId}/root/children?$select=id,name,folder&$top=200`,
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/root/children?$select=id,name,webUrl,folder&$top=200`,
       { headers });
     if (!r.ok) return;
     const items = (await r.json()).value || [];
@@ -860,7 +860,7 @@ async function listFolderRecursive(driveId, itemId, headers, addFile, depth) {
   if (depth > 4) return;
   try {
     const r = await fetch(
-      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/children?$select=id,name,folder&$top=200`,
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/children?$select=id,name,webUrl,folder&$top=200`,
       { headers });
     if (!r.ok) return;
     const items = (await r.json()).value || [];
@@ -898,6 +898,23 @@ function getRelevantFiles(question) {
   const relevant = scored.filter(f => f.score > 0).sort((a,b) => b.score - a.score).slice(0, 8);
   if (relevant.length === 0) return scored.slice(0, 5); // fallback to first 5
   return relevant;
+}
+
+// Get a direct download/view URL for a file
+async function getFileDownloadUrl(id, driveId) {
+  try {
+    const endpoint = driveId
+      ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${id}?$select=id,name,webUrl,@microsoft.graph.downloadUrl`
+      : `https://graph.microsoft.com/v1.0/me/drive/items/${id}?$select=id,name,webUrl,@microsoft.graph.downloadUrl`;
+    const r = await fetch(endpoint, { headers: { Authorization: `Bearer ${token}` } });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return {
+      webUrl: d.webUrl || null,
+      downloadUrl: d['@microsoft.graph.downloadUrl'] || null,
+      name: d.name
+    };
+  } catch(e) { return null; }
 }
 
 async function readFileContent(id, name, driveId) {
@@ -1072,7 +1089,35 @@ Rules: Answer strictly from the data provided. Be specific with model numbers, q
     const data = await resp.json();
     const reply = data.content?.[0]?.text || 'No response received.';
     chatHistory.push({ role:'assistant', content: reply });
-    addMsg('assistant', fmt(reply));
+
+    // Build download links for files that were read for this query
+    let fileLinks = '';
+    if (relevantFiles.length > 0) {
+      const linkItems = await Promise.all(relevantFiles.map(async f => {
+        const urls = await getFileDownloadUrl(f.id, f.driveId);
+        if (!urls) return null;
+        const icon = f.name.match(/\.xlsx?$/i) ? '📊' :
+                     f.name.match(/\.docx?$/i) ? '📄' :
+                     f.name.match(/\.pdf$/i)   ? '📕' : '📎';
+        const viewLink = urls.webUrl
+          ? `<a href="${urls.webUrl}" target="_blank" style="color:var(--dark);text-decoration:none;font-weight:600;">${icon} ${esc(f.name)}</a>`
+          : `${icon} ${esc(f.name)}`;
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:#f9f8f4;border:1px solid var(--border);border-radius:6px;gap:10px;margin-top:4px;">
+          <span style="font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${viewLink}</span>
+          ${urls.downloadUrl ? `<a href="${urls.downloadUrl}" download="${esc(f.name)}" style="flex-shrink:0;background:var(--dark);color:var(--yellow);font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:3px 10px;border-radius:4px;text-decoration:none;">Download</a>` : ''}
+          ${urls.webUrl ? `<a href="${urls.webUrl}" target="_blank" style="flex-shrink:0;background:transparent;color:var(--dark);border:1px solid var(--border);font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;padding:3px 10px;border-radius:4px;text-decoration:none;">Open</a>` : ''}
+        </div>`;
+      }));
+      const validLinks = linkItems.filter(Boolean);
+      if (validLinks.length > 0) {
+        fileLinks = `<div style="margin-top:10px;border-top:1px solid var(--border);padding-top:8px;">
+          <div style="font-family:'Barlow Condensed',sans-serif;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:var(--muted);margin-bottom:6px;">Source Files</div>
+          ${validLinks.join('')}
+        </div>`;
+      }
+    }
+
+    addMsg('assistant', fmt(reply) + fileLinks);
     const newUsed = await getAndIncrementCounter();
     updateCounterUI(newUsed);
 
