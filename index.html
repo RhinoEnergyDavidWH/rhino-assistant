@@ -777,23 +777,21 @@ async function discoverFiles(terms, cat) {
 
   const headers = { Authorization: `Bearer ${token}` };
 
-  // Search personal OneDrive
-  for (const q of terms.slice(0, 15)) {
+  // 1 — Search personal OneDrive with category terms
+  for (const q of terms.slice(0, 12)) {
     try {
       const r = await fetch(
         `https://graph.microsoft.com/v1.0/me/drive/root/search(q='${encodeURIComponent(q)}')` +
-        `?$select=id,name&$top=100`,
-        { headers });
+        `?$select=id,name&$top=100`, { headers });
       if (r.ok) (await r.json()).value?.forEach(f => addFile(f, null));
     } catch(e) {}
   }
 
-  // Search sharedWithMe
+  // 2 — Files shared directly with this user
   try {
     const r = await fetch('https://graph.microsoft.com/v1.0/me/drive/sharedWithMe?$select=id,name,remoteItem', { headers });
     if (r.ok) {
-      const d = await r.json();
-      (d.value||[]).forEach(f => {
+      (await r.json()).value?.forEach(f => {
         const ri = f.remoteItem;
         if (ri) addFile({ id: ri.id, name: f.name }, ri.parentReference?.driveId);
         else addFile(f, null);
@@ -801,183 +799,76 @@ async function discoverFiles(terms, cat) {
     }
   } catch(e) {}
 
-  // Search all my drives
-  try {
-    const dr = await fetch('https://graph.microsoft.com/v1.0/me/drives?$select=id', { headers });
-    if (dr.ok) {
-      const drives = (await dr.json()).value || [];
-      for (const drive of drives) {
-        for (const q of terms.slice(0,8)) {
-          try {
-            const r = await fetch(
-              `https://graph.microsoft.com/v1.0/drives/${drive.id}/root/search(q='${encodeURIComponent(q)}')` +
-              `?$select=id,name&$top=100`,
-              { headers });
-            if (r.ok) (await r.json()).value?.forEach(f => addFile(f, drive.id));
-          } catch(e) {}
-        }
-      }
-    }
-  } catch(e) {}
-
-  // Search SharePoint sites
-  try {
-    const sr = await fetch('https://graph.microsoft.com/v1.0/sites?search=*&$select=id', { headers });
-    if (sr.ok) {
-      const sites = (await sr.json()).value || [];
-      for (const site of sites.slice(0,15)) {
-        try {
-          const drivesR = await fetch(`https://graph.microsoft.com/v1.0/sites/${site.id}/drives?$select=id`, { headers });
-          if (!drivesR.ok) continue;
-          const drives = (await drivesR.json()).value || [];
-          for (const drive of drives) {
-            for (const q of terms.slice(0,8)) {
-              try {
-                const r = await fetch(
-                  `https://graph.microsoft.com/v1.0/drives/${drive.id}/root/search(q='${encodeURIComponent(q)}')` +
-                  `?$select=id,name&$top=100`,
-                  { headers });
-                if (r.ok) (await r.json()).value?.forEach(f => addFile(f, drive.id));
-              } catch(e) {}
-            }
-          }
-        } catch(e) {}
-      }
-    }
-  } catch(e) {}
-
-  // Graph Search API
-  try {
-    for (const q of [cat === 'boq' ? 'BOQ OR BOO' : terms[0], terms[1] || terms[0]]) {
-      try {
-        const sr = await fetch('https://graph.microsoft.com/v1.0/search/query', {
-          method: 'POST',
-          headers: { ...headers, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            requests: [{ entityTypes: ['driveItem'], query: { queryString: q }, from: 0, size: 200, fields: ['id','name','parentReference'] }]
-          })
-        });
-        if (sr.ok) {
-          const sd = await sr.json();
-          const hits = sd.value?.[0]?.hitsContainers?.[0]?.hits || [];
-          hits.forEach(hit => {
-            const res = hit.resource;
-            if (res?.name && res?.id) addFile({ id: res.id, name: res.name }, res.parentReference?.driveId);
-          });
-        }
-      } catch(e) {}
-    }
-  } catch(e) {}
-
-  // ── DIRECT FOLDER NAVIGATION ──
-  // For BOQ category: navigate directly into the known folder paths
-  // This finds files regardless of search index depth
-  if (cat === 'boq') {
-    await navigateFolderPaths(addFile, headers);
-  }
-}
-
-// Recursively list all files in a drive folder
-async function listFolderContents(driveId, itemId, headers, addFile, depth) {
-  if (depth > 4) return; // max 4 levels deep
-  try {
-    const endpoint = driveId
-      ? `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/children?$select=id,name,folder&$top=200`
-      : `https://graph.microsoft.com/v1.0/me/drive/items/${itemId}/children?$select=id,name,folder&$top=200`;
-    const r = await fetch(endpoint, { headers });
-    if (!r.ok) return;
-    const d = await r.json();
-    for (const item of (d.value || [])) {
-      if (item.folder) {
-        // It's a folder — recurse into it
-        await listFolderContents(driveId, item.id, headers, addFile, depth + 1);
-      } else {
-        // It's a file — add it
-        addFile({ id: item.id, name: item.name }, driveId);
-      }
-    }
-  } catch(e) {}
-}
-
-// Try known folder paths across all drives
-async function navigateFolderPaths(addFile, headers) {
-  // Known path candidates for BOQ Projects folder
-  const knownPaths = [
-    "RES Stores Stock/BOQ's/BOQ Projects",
-    "RES Stores Stock/BOQs/BOQ Projects",
-    "RES Stores Stock/BOQ/BOQ Projects",
-    "BOQ's/BOQ Projects",
-    "BOQ Projects",
-    "RES Stores Stock/BOQ's",
-  ];
-
-  // Try on personal OneDrive first
-  for (const path of knownPaths) {
-    try {
-      const r = await fetch(
-        `https://graph.microsoft.com/v1.0/me/drive/root:/${encodeURIComponent(path)}?$select=id,name`,
-        { headers });
-      if (r.ok) {
-        const folder = await r.json();
-        if (folder.id) {
-          console.log('✅ Found BOQ folder via personal drive:', path);
-          await listFolderContents(null, folder.id, headers, addFile, 0);
-        }
-      }
-    } catch(e) {}
-  }
-
-  // Try on all accessible drives
+  // 3 — Enumerate all accessible drives and navigate their folders
   try {
     const dr = await fetch('https://graph.microsoft.com/v1.0/me/drives?$select=id,name', { headers });
     if (dr.ok) {
       const drives = (await dr.json()).value || [];
       for (const drive of drives) {
-        for (const path of knownPaths) {
+        // First search by terms
+        for (const q of terms.slice(0, 6)) {
           try {
             const r = await fetch(
-              `https://graph.microsoft.com/v1.0/drives/${drive.id}/root:/${encodeURIComponent(path)}?$select=id,name`,
-              { headers });
-            if (r.ok) {
-              const folder = await r.json();
-              if (folder.id) {
-                console.log('✅ Found BOQ folder on drive', drive.name, ':', path);
-                await listFolderContents(drive.id, folder.id, headers, addFile, 0);
-              }
-            }
+              `https://graph.microsoft.com/v1.0/drives/${drive.id}/root/search(q='${encodeURIComponent(q)}')` +
+              `?$select=id,name&$top=100`, { headers });
+            if (r.ok) (await r.json()).value?.forEach(f => addFile(f, drive.id));
           } catch(e) {}
         }
+
+        // Then enumerate root of this drive to find folder structure
+        await enumerateDriveRoot(drive.id, headers, addFile, cat);
       }
     }
   } catch(e) {}
+}
 
-  // Try on all SharePoint sites
+// Enumerate drive root and navigate into relevant folders
+async function enumerateDriveRoot(driveId, headers, addFile, cat) {
   try {
-    const sr = await fetch('https://graph.microsoft.com/v1.0/sites?search=*&$select=id,displayName', { headers });
-    if (sr.ok) {
-      const sites = (await sr.json()).value || [];
-      for (const site of sites.slice(0, 15)) {
-        try {
-          const drivesR = await fetch(`https://graph.microsoft.com/v1.0/sites/${site.id}/drives?$select=id,name`, { headers });
-          if (!drivesR.ok) continue;
-          const drives = (await drivesR.json()).value || [];
-          for (const drive of drives) {
-            for (const path of knownPaths) {
-              try {
-                const r = await fetch(
-                  `https://graph.microsoft.com/v1.0/drives/${drive.id}/root:/${encodeURIComponent(path)}?$select=id,name`,
-                  { headers });
-                if (r.ok) {
-                  const folder = await r.json();
-                  if (folder.id) {
-                    console.log('✅ Found BOQ folder on SharePoint site', site.displayName, ':', path);
-                    await listFolderContents(drive.id, folder.id, headers, addFile, 0);
-                  }
-                }
-              } catch(e) {}
-            }
-          }
-        } catch(e) {}
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/root/children?$select=id,name,folder&$top=200`,
+      { headers });
+    if (!r.ok) return;
+    const items = (await r.json()).value || [];
+
+    for (const item of items) {
+      if (!item.folder) {
+        addFile(item, driveId);
+        continue;
+      }
+      const name = item.name.toLowerCase();
+      // Navigate into folders that could contain BOQs or relevant files
+      const relevant = cat === 'boq'
+        ? name.includes("boq") || name.includes("boo") || name.includes("project") || name.includes("install") || name.includes("solar") || name.includes("completed")
+        : cat === 'stock'
+        ? name.includes("stock") || name.includes("inventory") || name.includes("warehouse") || name.includes("tool")
+        : cat === 'ppe'
+        ? name.includes("ppe") || name.includes("safety") || name.includes("protective")
+        : cat === 'policy'
+        ? name.includes("policy") || name.includes("procedure") || name.includes("sop") || name.includes("compliance")
+        : name.includes("return") || name.includes("delivery") || name.includes("dispatch");
+
+      if (relevant) {
+        await listFolderRecursive(driveId, item.id, headers, addFile, 0);
+      }
+    }
+  } catch(e) {}
+}
+
+// Recursively list all files in a folder (max 4 levels deep)
+async function listFolderRecursive(driveId, itemId, headers, addFile, depth) {
+  if (depth > 4) return;
+  try {
+    const r = await fetch(
+      `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/children?$select=id,name,folder&$top=200`,
+      { headers });
+    if (!r.ok) return;
+    const items = (await r.json()).value || [];
+    for (const item of items) {
+      if (item.folder) {
+        await listFolderRecursive(driveId, item.id, headers, addFile, depth + 1);
+      } else {
+        addFile({ id: item.id, name: item.name }, driveId);
       }
     }
   } catch(e) {}
