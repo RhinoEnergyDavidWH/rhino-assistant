@@ -719,7 +719,7 @@ async function loadFiles() {
         for (const q of ['.xlsx','.docx','BOQ','policy']) {
           try {
             const r = await fetch(
-              `https://graph.microsoft.com/v1.0/drives/${drive.id}/root/search(q='${encodeURIComponent(q)}')?$select=id,name&$top=10`,
+              `https://graph.microsoft.com/v1.0/drives/${drive.id}/root/search(q='${encodeURIComponent(q)}')?$select=id,name&$top=50`,
               { headers: { Authorization: `Bearer ${token}` } });
             if (!r.ok) continue;
             const d = await r.json();
@@ -734,13 +734,51 @@ async function loadFiles() {
       }
     }
   } catch(e) {}
+
+  // 4 — Search SharePoint sites the user has access to
+  try {
+    const sitesR = await fetch(
+      'https://graph.microsoft.com/v1.0/sites?search=*&$select=id,name,displayName',
+      { headers: { Authorization: `Bearer ${token}` } });
+    if (sitesR.ok) {
+      const sitesD = await sitesR.json();
+      for (const site of (sitesD.value||[]).slice(0,10)) {
+        try {
+          // Get drives for each site
+          const drivesR = await fetch(
+            `https://graph.microsoft.com/v1.0/sites/${site.id}/drives?$select=id,name`,
+            { headers: { Authorization: `Bearer ${token}` } });
+          if (!drivesR.ok) continue;
+          const drivesD = await drivesR.json();
+          for (const drive of (drivesD.value||[])) {
+            // Search each site drive for xlsx and BOQ files
+            for (const q of ['.xlsx','.docx','BOQ']) {
+              try {
+                const r = await fetch(
+                  `https://graph.microsoft.com/v1.0/drives/${drive.id}/root/search(q='${encodeURIComponent(q)}')?$select=id,name&$top=50`,
+                  { headers: { Authorization: `Bearer ${token}` } });
+                if (!r.ok) continue;
+                const d = await r.json();
+                for (const f of (d.value||[])) {
+                  if (!seen.has(f.id) && f.name !== COUNTER_FILE && f.name.match(/\.(xlsx|xls|csv|txt|docx|doc)$/i)) {
+                    seen.add(f.id);
+                    files.push({ id: f.id, name: f.name, driveId: drive.id });
+                  }
+                }
+              } catch(e) {}
+            }
+          }
+        } catch(e) {}
+      }
+    }
+  } catch(e) {}
   if (!files.length) {
     setStatus('', 'No project files found.');
     addMsg('assistant', 'I could not find project files in your OneDrive. Make sure your BOQ and policy files are saved there, then refresh.');
     enableInput(); return;
   }
   setStatus('amber', `Reading ${files.length} files…`);
-  for (const f of files.slice(0,40)) {
+  for (const f of files.slice(0,60)) {
     try { const t = await readFile(f.id, f.name, f.driveId); if (t && t.length > 30) fileData[f.name] = t; } catch(e) {}
   }
   const count = Object.keys(fileData).length;
