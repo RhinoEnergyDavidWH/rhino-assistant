@@ -655,14 +655,30 @@ async function loadPPEData() {
 
 async function loadFiles() {
   setStatus('amber', 'Searching OneDrive for project files…');
-  const terms = ['.xlsx','.docx','BOQ','policy','procedure','PPE','project'];
+  const terms = ['.xlsx','.docx','.csv','BOQ','policy','procedure','PPE','project','engineering','installation','solar','RES','SLD','report','schedule','register','inspection','material','equipment','invoice','quote'];
   const seen = new Set(), files = [];
 
-  // 1 — Search personal OneDrive
+  // 1a — Broad sweep: get ALL xlsx and docx files first (up to 100)
+  for (const ext of ['.xlsx','.docx','.csv']) {
+    try {
+      const r = await fetch(
+        `https://graph.microsoft.com/v1.0/me/drive/root/search(q='${encodeURIComponent(ext)}')?$select=id,name&$top=100`,
+        { headers: { Authorization: `Bearer ${token}` } });
+      if (!r.ok) continue;
+      const d = await r.json();
+      for (const f of (d.value||[])) {
+        if (!seen.has(f.id) && f.name !== COUNTER_FILE && f.name.match(/\.(xlsx|xls|csv|txt|docx|doc)$/i)) {
+          seen.add(f.id); files.push({ id: f.id, name: f.name, driveId: null });
+        }
+      }
+    } catch(e) {}
+  }
+
+  // 1b — Keyword search for project-specific terms
   for (const q of terms) {
     try {
       const r = await fetch(
-        `https://graph.microsoft.com/v1.0/me/drive/root/search(q='${encodeURIComponent(q)}')?$select=id,name&$top=15`,
+        `https://graph.microsoft.com/v1.0/me/drive/root/search(q='${encodeURIComponent(q)}')?$select=id,name&$top=50`,
         { headers: { Authorization: `Bearer ${token}` } });
       if (!r.ok) continue;
       const d = await r.json();
@@ -724,15 +740,15 @@ async function loadFiles() {
     enableInput(); return;
   }
   setStatus('amber', `Reading ${files.length} files…`);
-  for (const f of files.slice(0,25)) {
+  for (const f of files.slice(0,40)) {
     try { const t = await readFile(f.id, f.name, f.driveId); if (t && t.length > 30) fileData[f.name] = t; } catch(e) {}
   }
   const count = Object.keys(fileData).length;
-  const names = Object.keys(fileData).slice(0,3).map(n=>`<em>${n}</em>`).join(', ');
-  const more = count > 3 ? ` and ${count-3} more` : '';
+  const allNames = Object.keys(fileData).map(n=>`<em>${n}</em>`).join(', ');
   setStatus('green', `${count} file${count!==1?'s':''} loaded — ready`);
   addMsg('assistant',
-    `Ready. Loaded <strong>${count} file${count!==1?'s':''}</strong> from OneDrive: ${names}${more}.<br><br>` +
+    `Ready. Loaded <strong>${count} file${count!==1?'s':''}</strong> from OneDrive.<br><br>` +
+    `<strong>Files loaded:</strong> ${allNames}<br><br>` +
     `Ask me anything about your projects, materials, equipment, quantities, PPE, or company policies.`
   );
   enableInput();
@@ -752,17 +768,17 @@ async function readFile(id, name, driveId) {
     wb.SheetNames.forEach(sn => {
       const rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header:1, defval:'' });
       out += `\n[Sheet: ${sn}]\n`;
-      rows.slice(0,500).forEach(row => { out += row.join('\t') + '\n'; });
+      rows.slice(0,150).forEach(row => { out += row.join('\t') + '\n'; });
     });
     return out;
   }
-  if (name.match(/\.(csv|txt)$/i)) return `=== ${name} ===\n` + new TextDecoder().decode(buf).slice(0,50000);
+  if (name.match(/\.(csv|txt)$/i)) return `=== ${name} ===\n` + new TextDecoder().decode(buf).slice(0,15000);
   if (name.match(/\.(docx|doc)$/i)) {
     try {
       await ensureJSZip();
       const zip = await JSZip.loadAsync(buf);
       const xml = await zip.file('word/document.xml').async('string');
-      return `=== ${name} ===\n` + xml.replace(/<[^>]+>/g,' ').replace(/\s{2,}/g,' ').trim().slice(0,50000);
+      return `=== ${name} ===\n` + xml.replace(/<[^>]+>/g,' ').replace(/\s{2,}/g,' ').trim().slice(0,15000);
     } catch(e) { return null; }
   }
   return null;
@@ -808,7 +824,7 @@ async function send() {
     const filePart = Object.keys(fileData).length > 0
       ? Object.values(fileData).join('\n\n---\n\n')
       : '';
-    const context = (filePart + (ppeData ? '\n\n---\n\n' + ppeData : '') || 'No project files loaded.').slice(0, 180000);
+    const context = (filePart + (ppeData ? '\n\n---\n\n' + ppeData : '') || 'No project files loaded.').slice(0, 60000);
 
     const systemPrompt = `You are the Rhino Energy Project Assistant — an internal tool for Rhino Energy Solutions staff in South Africa (Solar. Energy. Excellence.)
 Answer questions about: solar and electrical project BOQs, installed equipment (panels, inverters, cabling, mounting), quantities, materials, PPE requirements, company policies and procedures, and available equipment.
@@ -818,7 +834,7 @@ PROJECT DATA:
 ${context}`;
 
     // Build messages for Claude — convert from Gemini format
-    const messages = history.slice(-10).map(m => ({
+    const messages = history.slice(-4).map(m => ({
       role: m.role === 'model' ? 'assistant' : 'user',
       content: m.parts[0].text
     }));
