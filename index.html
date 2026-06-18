@@ -772,6 +772,40 @@ async function loadFiles() {
       }
     }
   } catch(e) {}
+  // 5 — Microsoft Graph Search API (finds files anywhere the user can access)
+  try {
+    for (const q of ['xlsx BOQ', 'xlsx project', 'xlsx engineering', 'docx policy', 'docx procedure']) {
+      try {
+        const sr = await fetch('https://graph.microsoft.com/v1.0/search/query', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            requests: [{
+              entityTypes: ['driveItem'],
+              query: { queryString: q },
+              from: 0,
+              size: 50,
+              fields: ['id','name','parentReference']
+            }]
+          })
+        });
+        if (!sr.ok) continue;
+        const sd = await sr.json();
+        const hits = sd.value?.[0]?.hitsContainers?.[0]?.hits || [];
+        for (const hit of hits) {
+          const res = hit.resource;
+          const name = res.name;
+          const itemId = res.id;
+          const driveId = res.parentReference?.driveId || null;
+          if (name && itemId && !seen.has(itemId) && name !== COUNTER_FILE && name.match(/\.(xlsx|xls|csv|txt|docx|doc)$/i)) {
+            seen.add(itemId);
+            files.push({ id: itemId, name, driveId });
+          }
+        }
+      } catch(e) {}
+    }
+  } catch(e) {}
+
   if (!files.length) {
     setStatus('', 'No project files found.');
     addMsg('assistant', 'I could not find project files in your OneDrive. Make sure your BOQ and policy files are saved there, then refresh.');
